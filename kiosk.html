@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <meta name="robots" content="noindex">
+  <title>ER Attendance QR</title>
+  <link rel="stylesheet" href="styles.css">
+  <style>
+    body { display: flex; min-height: 100vh; align-items: center; justify-content: center; }
+    .kiosk { text-align: center; padding: 24px; }
+    .kiosk h1 { font-size: 28px; margin: 0 0 6px; }
+    #qr { background: #fff; padding: 18px; border-radius: 18px; display: inline-block; margin: 18px 0; }
+    #qr img, #qr canvas { display: block; width: min(70vw, 70vh) !important; height: auto !important; }
+    #count { font-size: 18px; color: var(--muted); }
+  </style>
+</head>
+<body>
+<div class="kiosk">
+  <h1>ER Attendance</h1>
+  <div id="hospitalName" style="font-size:18px">Emergency Department</div>
+  <div class="muted">Scan with your phone camera to check in</div>
+  <div id="qr"></div>
+  <div id="count"></div>
+  <div id="err"></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="config.js"></script>
+<script src="common.js"></script>
+<script>
+(function () {
+  // The kiosk key arrives once in the URL (?k=...), is stored on this screen only, then removed from the address bar.
+  const KEY = 'ed_kiosk_key';
+  const p = new URLSearchParams(location.search);
+  if (p.get('k')) { store.set(KEY, p.get('k')); history.replaceState(null, '', location.pathname); }
+  const kioskKey = store.get(KEY);
+  if (!kioskKey) { $('err').innerHTML = '<div class="result bad">Kiosk key missing. Open the full link that contains ?k=</div>'; return; }
+
+  const qr = new QRCode($('qr'), { text: 'loading', width: 512, height: 512, correctLevel: QRCode.CorrectLevel.M });
+  let left = 0, timer = null;
+
+  async function refresh() {
+    const r = await api('kioskToken', { kioskKey: kioskKey });
+    if (!r.ok) {
+      $('err').innerHTML = '<div class="result bad">' + msg(r.code) + '</div>';
+      $('qr').style.visibility = 'hidden';
+      setTimeout(refresh, 10000);
+      return;
+    }
+    $('err').innerHTML = '';
+    $('qr').style.visibility = 'visible';
+    if (r.hospitalName) $('hospitalName').textContent = r.hospitalName;
+    qr.clear(); qr.makeCode(r.url);
+    left = r.secondsLeft;
+    clearInterval(timer);
+    timer = setInterval(function () {
+      left--;
+      $('count').textContent = 'New code in ' + Math.max(0, left) + ' s';
+      if (left <= 0) { clearInterval(timer); setTimeout(refresh, 800); }
+    }, 1000);
+  }
+
+  // Keep the screen awake where supported.
+  async function wake() { try { if (navigator.wakeLock) await navigator.wakeLock.request('screen'); } catch (e) {} }
+  document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') { wake(); refresh(); } });
+  wake();
+  refresh();
+})();
+</script>
+</body>
+</html>

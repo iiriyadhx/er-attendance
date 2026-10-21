@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>ER Attendance</title>
+  <link rel="stylesheet" href="styles.css">
+  <style>
+    .choices { display: grid; gap: 8px; }
+    .choices.c5 { grid-template-columns: repeat(5, 1fr); }
+    .choices.c2 { grid-template-columns: repeat(2, 1fr); }
+    .choices.c3 { grid-template-columns: repeat(3, 1fr); }
+    .choices label { margin: 0; color: inherit; font-size: inherit; }
+    .choices input { position: absolute; opacity: 0; pointer-events: none; }
+    .choices span {
+      display: block; text-align: center; padding: 11px 4px; border-radius: 10px; font-weight: 700;
+      border: 1px solid var(--line); background: var(--bg); color: var(--ink); cursor: pointer; line-height: 1.25;
+    }
+    .choices span small { display: block; font-weight: 500; font-size: 12px; color: var(--muted); margin-top: 2px; }
+    .choices input:checked + span { background: var(--brand); color: var(--brand-ink); border-color: var(--brand); }
+    .choices input:checked + span small { color: inherit; opacity: .85; }
+    .choices input:focus-visible + span { outline: 2px solid var(--brand); outline-offset: 2px; }
+    .choices.c5 span { font-size: 14px; padding: 11px 0; }
+    .hint { font-size: 13px; color: var(--muted); margin-top: 6px; }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <h1>ER Attendance</h1>
+    <p id="hospitalName">Emergency Department</p>
+  </header>
+
+  <div class="card">
+    <div class="row"><span class="muted">Screen QR</span><span class="pill" id="qrPill">—</span></div>
+    <div class="row" style="margin-top:10px"><span class="muted">Location</span><span class="pill" id="locPill">Checked when you submit</span></div>
+  </div>
+
+  <div class="card">
+    <label for="fullName">Full name (first, father, family)</label>
+    <input id="fullName" autocomplete="name" maxlength="60" placeholder="e.g. Mohammed Abdullah Alahmad">
+
+    <label>Category</label>
+    <div class="choices c5" role="radiogroup" aria-label="Category" id="catGroup">
+      <label><input type="radio" name="category" value="R1"><span>R1</span></label>
+      <label><input type="radio" name="category" value="R2"><span>R2</span></label>
+      <label><input type="radio" name="category" value="R3"><span>R3</span></label>
+      <label><input type="radio" name="category" value="R4"><span>R4</span></label>
+      <label><input type="radio" name="category" value="ROTATOR"><span>Rotator</span></label>
+    </div>
+
+    <div id="specWrap" class="hidden">
+      <label for="specialty">Your specialty</label>
+      <select id="specialty"><option value="">Choose…</option></select>
+    </div>
+
+    <label>Shift type</label>
+    <div class="choices c2" role="radiogroup" aria-label="Shift type">
+      <label><input type="radio" name="shiftType" value="12H"><span>12 hours</span></label>
+      <label><input type="radio" name="shiftType" value="8H"><span>8 hours</span></label>
+    </div>
+
+    <div id="shiftWrap" class="hidden">
+      <label>Shift</label>
+      <div class="choices" role="radiogroup" aria-label="Shift" id="shiftGroup"></div>
+      <div class="hint" id="shiftHint"></div>
+    </div>
+
+    <button id="btnSubmit">Check in</button>
+    <div id="result"></div>
+    <p class="muted" style="margin-top:12px">Your location is read only at the moment you check in, to confirm you are inside the hospital area. You are not tracked.</p>
+  </div>
+</div>
+
+<script src="config.js"></script>
+<script src="common.js"></script>
+<script>
+(function () {
+  // ---- Capture the rotating QR token, then remove it from the address bar so it isn't bookmarked/shared.
+  const params = new URLSearchParams(location.search);
+  if (params.get('t')) {
+    try { sessionStorage.setItem('qrToken', params.get('t')); sessionStorage.setItem('qrAt', String(Date.now())); } catch (e) {}
+    history.replaceState(null, '', location.pathname);
+  }
+  function qrToken() { try { return sessionStorage.getItem('qrToken') || ''; } catch (e) { return ''; } }
+  function qrAgeSec() { try { return (Date.now() - Number(sessionStorage.getItem('qrAt') || 0)) / 1000; } catch (e) { return 1e9; } }
+
+  // Fallback definitions; replaced by the server's on load.
+  let SH = {
+    '12H': [{ code: 'DAY12', label: 'Day', start: '08:00', hours: 12 }, { code: 'NIGHT12', label: 'Night', start: '20:00', hours: 12 }],
+    '8H': [{ code: 'MORNING8', label: 'Morning', start: '08:00', hours: 8 }, { code: 'EVENING8', label: 'Evening', start: '16:00', hours: 8 },
+           { code: 'NIGHT8', label: 'Night', start: '00:00', hours: 8 }]
+  };
+  let requireQr = true, earlyMin = 120, clockSkew = 0;
+  const K = { name: 'er_att_name', cat: 'er_att_category', spec: 'er_att_specialty', type: 'er_att_shift_type' };
+
+  function nowMs() { return Date.now() + clockSkew; }
+  function setPill(id, text, cls) { const el = $(id); el.textContent = text; el.className = 'pill' + (cls ? ' ' + cls : ''); }
+  function result(code, cls, extra) {
+    $('result').innerHTML = '<div class="result ' + cls + '">' + msg(code) + (extra ? '<div class="en">' + esc(extra) + '</div>' : '') + '</div>';
+  }
+  function refreshQrPill() {
+    if (!requireQr) { setPill('qrPill', 'Not required'); return; }
+    if (!qrToken()) setPill('qrPill', 'Scan the screen QR', 'warn');
+    else if (qrAgeSec() > 150) setPill('qrPill', 'Expired — scan again', 'warn');
+    else setPill('qrPill', 'Scanned', 'ok');
+  }
+  function checked(name) { const el = document.querySelector('input[name=' + name + ']:checked'); return el ? el.value : ''; }
+  function check(name, value) { const el = document.querySelector('input[name=' + name + '][value="' + value + '"]'); if (el) el.checked = true; return !!el; }
+
+  function fillSpecialties(list) {
+    const sel = $('specialty'), keep = sel.value || store.get(K.spec) || '';
+    sel.innerHTML = '<option value="">Choose…</option>' + list.map(s => '<option>' + esc(s) + '</option>').join('');
+    if (list.indexOf(keep) >= 0) sel.value = keep;
+  }
+  function onCategory() { $('specWrap').classList.toggle('hidden', checked('category') !== 'ROTATOR'); }
+
+  // Render the shifts of the chosen type and auto-select the one nearest to now.
+  function renderShifts(autoPick) {
+    const type = checked('shiftType');
+    $('shiftWrap').classList.toggle('hidden', !type);
+    if (!type) return;
+    const list = SH[type] || [];
+    const prev = checked('shift');
+    const grp = $('shiftGroup');
+    grp.className = 'choices c' + list.length;
+    grp.innerHTML = list.map(s => '<label><input type="radio" name="shift" value="' + esc(s.code) + '"><span>' + esc(s.label) +
+      '<small>' + esc(s.start) + '–' + esc(shiftEnd(s)) + '</small></span></label>').join('');
+    const pick = (!autoPick && prev && list.some(s => s.code === prev)) ? prev : suggestShift(list, nowMs(), earlyMin);
+    if (pick) check('shift', pick);
+    grp.querySelectorAll('input').forEach(i => { i.onchange = updateHint; });
+    updateHint(autoPick);
+  }
+  function updateHint(auto) {
+    const type = checked('shiftType'), code = checked('shift');
+    const s = (SH[type] || []).find(x => x.code === code);
+    if (!s) { $('shiftHint').textContent = ''; return; }
+    const inst = shiftInstance(s, nowMs(), earlyMin);
+    $('shiftHint').textContent = (auto === true ? 'Selected automatically from the current time. ' : '') +
+      (inst.open ? 'Shift of ' + inst.shiftDate + ', ' + s.start + '–' + shiftEnd(s) + '.' : 'This shift is not open for check-in right now.');
+    $('shiftHint').style.color = inst.open ? '' : 'var(--bad)';
+  }
+
+  // Restore this phone's own previous choices (convenience only; the server enforces the rules).
+  if (store.get(K.name)) $('fullName').value = store.get(K.name);
+  if (store.get(K.cat)) check('category', store.get(K.cat));
+  if (store.get(K.type)) check('shiftType', store.get(K.type));
+  document.querySelectorAll('input[name=category]').forEach(i => { i.onchange = onCategory; });
+  document.querySelectorAll('input[name=shiftType]').forEach(i => { i.onchange = function () { renderShifts(true); }; });
+  fillSpecialties(['Internal Medicine', 'General Surgery', 'Pediatrics', 'Orthopedics', 'Family Medicine', 'Anesthesia',
+    'Obstetrics & Gynecology', 'Neurology', 'Radiology', 'Intern', 'Other']);
+  onCategory();
+  renderShifts(true);
+  refreshQrPill();
+
+  api('info').then(function (r) {
+    if (!r.ok) return;
+    if (r.hospitalName) $('hospitalName').textContent = r.hospitalName;
+    if (typeof r.requireQr === 'boolean') requireQr = r.requireQr;
+    if (r.shifts) SH = r.shifts;
+    if (r.earlyMin >= 0) earlyMin = r.earlyMin;
+    if (r.serverTime) clockSkew = r.serverTime - Date.now(); // trust the server clock for the suggestion
+    if (Array.isArray(r.specialties)) fillSpecialties(r.specialties);
+    renderShifts(true);
+    refreshQrPill();
+  });
+
+  function looksLikeTripleName(n) {
+    const words = n.replace(/\s+/g, ' ').trim().split(' ').filter(Boolean);
+    return words.length >= 3 && !/[0-9٠-٩]/.test(n);
+  }
+
+  // ---- Location: watch briefly and keep the most accurate fix.
+  function getBestPosition(maxWaitMs, goodEnoughM) {
+    return new Promise(function (resolve, reject) {
+      if (!('geolocation' in navigator)) { reject('NO_GEOLOCATION'); return; }
+      let best = null, done = false, watchId = null;
+      const finish = function (err) {
+        if (done) return; done = true;
+        if (watchId !== null) navigator.geolocation.clearWatch(watchId);
+        clearTimeout(timer);
+        if (err) reject(err); else if (best) resolve(best); else reject('LOCATION_TIMEOUT');
+      };
+      const timer = setTimeout(function () { finish(); }, maxWaitMs);
+      watchId = navigator.geolocation.watchPosition(function (pos) {
+        if (!best || pos.coords.accuracy < best.coords.accuracy) best = pos;
+        setPill('locPill', 'Accuracy ±' + Math.round(best.coords.accuracy) + ' m', best.coords.accuracy <= 30 ? 'ok' : 'warn');
+        if (pos.coords.accuracy <= goodEnoughM) finish();
+      }, function (err) {
+        if (err.code === 1) finish('LOCATION_DENIED');
+      }, { enableHighAccuracy: true, maximumAge: 0, timeout: maxWaitMs });
+    });
+  }
+
+  $('btnSubmit').onclick = async function () {
+    const btn = this;
+    const fullName = $('fullName').value.replace(/\s+/g, ' ').trim();
+    const category = checked('category'), specialty = $('specialty').value;
+    const shiftType = checked('shiftType'), shift = checked('shift');
+    if (!looksLikeTripleName(fullName)) { result('NAME_INVALID', 'bad'); $('fullName').focus(); return; }
+    if (!category) { result('CATEGORY_INVALID', 'bad'); return; }
+    if (category === 'ROTATOR' && !specialty) { result('SPECIALTY_INVALID', 'bad'); $('specialty').focus(); return; }
+    if (!shiftType || !shift) { result('SHIFT_INVALID', 'bad'); return; }
+
+    btn.disabled = true;
+    $('result').innerHTML = '';
+    setPill('locPill', 'Getting location…', 'warn');
+    let pos;
+    try {
+      pos = await getBestPosition(15000, 15);
+    } catch (code) {
+      setPill('locPill', 'Failed', 'bad');
+      result(code, 'bad');
+      btn.disabled = false;
+      return;
+    }
+    setPill('locPill', 'Verifying on server…', 'warn');
+    const r = await api('submitAttendance', {
+      fullName: fullName, category: category, specialty: category === 'ROTATOR' ? specialty : '',
+      shiftType: shiftType, shift: shift, deviceId: deviceId(),
+      lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy,
+      fixAgeMs: Math.max(0, Date.now() - pos.timestamp),
+      qrToken: qrToken()
+    });
+    btn.disabled = false;
+    // A success state is shown ONLY when the server confirms the record was committed.
+    if (r.ok && r.code === 'CONFIRMED') {
+      store.set(K.name, fullName); store.set(K.cat, category); store.set(K.type, shiftType);
+      if (category === 'ROTATOR') store.set(K.spec, specialty);
+      setPill('locPill', 'Inside the area', 'ok');
+      const who = r.category === 'ROTATOR' ? 'Rotator · ' + r.specialty : r.category;
+      result('CONFIRMED', 'ok', r.fullName + ' · ' + who + ' · ' + r.shiftLabel + ' · ' + r.shiftDate + ' · checked in ' + r.time);
+      try { sessionStorage.removeItem('qrToken'); } catch (e) {}
+      refreshQrPill();
+    } else {
+      setPill('locPill', r.code === 'OUTSIDE_GEOFENCE' ? 'Outside the area' : 'Not verified', 'bad');
+      result(r.code, (r.code === 'ALREADY_RECORDED' || r.code === 'OVERLAPPING_SHIFT') ? 'info' : 'bad');
+    }
+  };
+})();
+</script>
+</body>
+</html>

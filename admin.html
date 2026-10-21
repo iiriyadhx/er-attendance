@@ -1,0 +1,350 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <meta name="robots" content="noindex">
+  <title>ER Attendance Admin</title>
+  <link rel="stylesheet" href="styles.css">
+  <style>
+    .legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 13px; color: var(--muted); }
+    .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-inline-end: 6px; vertical-align: middle; }
+    .dot.ok { background: var(--ok); } .dot.bad { background: var(--bad); } .dot.warn { background: var(--warn); } .dot.void { background: var(--muted); }
+    .stat.ok { color: var(--ok); } .stat.bad { color: var(--bad); } .stat.warn { color: var(--warn); }
+    .shift-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 6px; margin-bottom: 10px; }
+    .shift-head h2 { margin: 0; }
+    .shift-head .counts { font-size: 13px; color: var(--muted); }
+    .person {
+      display: grid; grid-template-columns: minmax(180px, 2fr) 150px 1.2fr 1.6fr auto; gap: 6px 12px; align-items: center;
+      padding: 10px 12px; border-radius: 10px; margin-bottom: 8px; border-inline-start: 5px solid transparent;
+    }
+    .person.ok { background: var(--ok-bg); border-color: var(--ok); }
+    .person.bad { background: var(--bad-bg); border-color: var(--bad); }
+    .person.warn { background: var(--warn-bg); border-color: var(--warn); }
+    .person.void { background: var(--bg); border-color: var(--muted); opacity: .75; }
+    .person .name { font-weight: 700; }
+    .person .sub { font-size: 13px; color: var(--muted); }
+    .status { font-weight: 700; font-size: 14px; }
+    .person.ok .status { color: var(--ok); } .person.bad .status { color: var(--bad); }
+    .person.warn .status { color: var(--warn); } .person.void .status { color: var(--muted); }
+    .empty { color: var(--muted); font-size: 14px; padding: 6px 2px; }
+    .daynav { display: flex; gap: 8px; align-items: end; }
+    .daynav button { width: auto; margin: 0; padding: 12px 14px; flex: none; }
+    .daynav input { flex: 1; min-width: 0; }
+    .datecell { grid-column: span 2; }
+    @media (max-width: 520px) { .datecell { grid-column: 1 / -1; } }
+    @media (max-width: 760px) {
+      .person { grid-template-columns: 1fr auto; }
+      .person .status { grid-column: 2; grid-row: 1; text-align: end; }
+      .person .when, .person .notes { grid-column: 1 / -1; }
+      .person .act { grid-column: 1 / -1; }
+    }
+  </style>
+</head>
+<body>
+<div class="wrap wide">
+  <header class="top">
+    <h1>ER Attendance — Admin</h1>
+    <p id="hospitalName">Emergency Department</p>
+  </header>
+
+  <div id="login" class="card hidden" style="max-width:460px;margin:0 auto 14px">
+    <h2>Admin sign-in</h2>
+    <label for="adminKey">Admin key</label>
+    <input id="adminKey" type="password" autocomplete="off">
+    <button id="btnLogin">Sign in</button>
+    <div id="loginMsg"></div>
+  </div>
+
+  <section id="app" class="hidden">
+    <div class="card">
+      <div class="grid">
+        <div class="datecell">
+          <label for="day">Shift date</label>
+          <div class="daynav">
+            <button class="secondary" id="prevDay" aria-label="Previous day">‹</button>
+            <input id="day" type="date">
+            <button class="secondary" id="nextDay" aria-label="Next day">›</button>
+          </div>
+        </div>
+        <div><label for="q">Search by name</label><input id="q" placeholder="…"></div>
+        <div><label for="catF">Category</label>
+          <select id="catF"><option value="">All</option><option>R1</option><option>R2</option><option>R3</option><option>R4</option><option value="ROTATOR">Rotators</option></select></div>
+        <div><label for="shiftF">Shift</label><select id="shiftF"><option value="">All shifts</option></select></div>
+        <div><label for="showF">Show</label>
+          <select id="showF"><option value="">Everyone</option><option value="ok">Checked in</option><option value="bad">Tried from outside</option><option value="warn">Failed verification</option></select></div>
+      </div>
+      <div class="row" style="gap:10px">
+        <button id="btnLoad" class="secondary">Refresh</button>
+        <button id="btnLogout" class="secondary">Sign out</button>
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="card"><div class="muted"><span class="dot ok"></span>Checked in on site</div><div class="stat ok" id="sOk">0</div></div>
+      <div class="card"><div class="muted"><span class="dot bad"></span>Tried from outside</div><div class="stat bad" id="sBad">0</div></div>
+      <div class="card"><div class="muted"><span class="dot warn"></span>Failed verification</div><div class="stat warn" id="sWarn">0</div></div>
+      <div class="card"><div class="muted">R1 / R2 / R3 / R4 / Rotators</div><div class="stat" id="sCats" style="font-size:20px">0</div></div>
+    </div>
+
+    <div class="card">
+      <div class="legend">
+        <span><span class="dot ok"></span>Checked in from inside the hospital</span>
+        <span><span class="dot bad"></span>Tried to check in from outside — not recorded</span>
+        <span><span class="dot warn"></span>Failed for another reason (QR, GPS accuracy…) — not recorded</span>
+        <span><span class="dot void"></span>Voided by admin</span>
+      </div>
+    </div>
+
+    <div id="board"></div>
+
+    <div class="card">
+      <details>
+        <summary style="cursor:pointer;font-weight:700">All failed attempts (chronological)</summary>
+        <div class="table-scroll" style="margin-top:10px"><table>
+          <thead><tr><th></th><th>Time</th><th>Name</th><th>Category</th><th>Shift</th><th>Reason</th><th>Distance (m)</th><th>Accuracy (m)</th></tr></thead>
+          <tbody id="tAttempts"></tbody>
+        </table></div>
+      </details>
+    </div>
+
+    <div class="card">
+      <h2>Export to Excel</h2>
+      <div class="grid">
+        <div><label for="eFrom">From</label><input id="eFrom" type="date"></div>
+        <div><label for="eTo">To</label><input id="eTo" type="date"></div>
+      </div>
+      <div class="row" style="gap:8px;margin-top:10px;flex-wrap:wrap;justify-content:flex-start">
+        <button class="small secondary" data-range="today">Today</button>
+        <button class="small secondary" data-range="week">Last 7 days</button>
+        <button class="small secondary" data-range="month">This month</button>
+        <button class="small secondary" data-range="prevmonth">Last month</button>
+      </div>
+      <button id="btnExport">Download Excel file</button>
+      <p class="muted">Sheets: Summary per doctor · Check-ins (green) · Daily grid · Failed attempts (red = from outside).</p>
+      <div id="eMsg"></div>
+    </div>
+
+    <div class="card" id="voidCard">
+      <h2>Void a check-in (logged in the audit trail)</h2>
+      <p class="muted">Check-ins cannot be added manually — they can only be made on site. You can only void an incorrect one, with a reason.</p>
+      <label for="cAtt">Record</label>
+      <input id="cAtt" readonly placeholder="Press “Void” next to a check-in above">
+      <input id="cAttId" type="hidden">
+      <label for="cReason">Reason (required)</label>
+      <textarea id="cReason" rows="2"></textarea>
+      <button id="btnVoid">Void check-in</button>
+      <div id="cMsg"></div>
+    </div>
+  </section>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
+<script src="config.js"></script>
+<script src="common.js"></script>
+<script src="export.js"></script>
+<script>
+(function () {
+  const KEY = 'ed_admin_key';
+  function adminKey() { try { return sessionStorage.getItem(KEY) || ''; } catch (e) { return ''; } }
+  let data = null;
+
+  const today = riyadhDateKey(Date.now());
+  $('day').value = today; $('eFrom').value = today.slice(0, 8) + '01'; $('eTo').value = today;
+
+  const REASON = {
+    OUTSIDE_GEOFENCE: 'Outside the hospital area', LOCATION_INACCURATE: 'GPS accuracy too low',
+    LOCATION_MISSING: 'No location', LOCATION_UNRELIABLE: 'No location accuracy', LOCATION_STALE: 'Old location reading',
+    QR_INVALID: 'No / expired screen QR', SHIFT_NOT_CURRENT: 'Shift not open now', SHIFT_INVALID: 'No shift chosen',
+    ALREADY_RECORDED: 'Already checked in', OVERLAPPING_SHIFT: 'Overlapping shift', DEVICE_USED_RECENTLY: 'Phone used by someone else',
+    NAME_INVALID: 'Name not triple', CATEGORY_INVALID: 'No category', SPECIALTY_INVALID: 'No specialty',
+    DEVICE_INVALID: 'Device not identified', RATE_LIMITED: 'Too many attempts', BUSY: 'System busy', CONFIG_ERROR: 'Config error'
+  };
+  // "Already checked in" is not a failure of the person — don't show it as amber when they are green anyway.
+  const SOFT = ['ALREADY_RECORDED', 'OVERLAPPING_SHIFT'];
+
+  function catLabel(c, spec) { return c === 'ROTATOR' ? 'Rotator' + (spec ? ' · ' + spec : '') : c; }
+  function delta(m) { if (m === '' || m === null || isNaN(m)) return ''; return m === 0 ? 'on time' : (m > 0 ? m + ' min after start' : (-m) + ' min before start'); }
+
+  function shiftOrder() {
+    const all = [];
+    ['12H', '8H'].forEach(t => (data.shifts[t] || []).forEach(s => all.push(s)));
+    return all.sort((a, b) => (a.start === '00:00' ? '24:00' : a.start).localeCompare(b.start === '00:00' ? '24:00' : b.start) || b.hours - a.hours);
+  }
+
+  function show(which) {
+    $('login').classList.toggle('hidden', which !== 'login');
+    $('app').classList.toggle('hidden', which !== 'app');
+  }
+
+  /** One entry per person per shift: green check-in, grey voided, red (outside) or amber (other failure). */
+  function buildPeople() {
+    const people = [];
+    const byKey = {};
+    data.attendance.forEach(r => {
+      const e = { kind: r.status === 'CONFIRMED' ? 'ok' : 'void', rec: r, nameKey: r.nameKey, fullName: r.fullName,
+                  category: r.category, specialty: r.specialty, shift: r.shift, attempts: [] };
+      people.push(e);
+      if (r.status === 'CONFIRMED') byKey[r.nameKey + '|' + r.shift] = e;
+    });
+    const failed = {};
+    data.attempts.forEach(a => {
+      const k = a.nameKey + '|' + a.shift;
+      if (byKey[k]) { byKey[k].attempts.push(a); return; }
+      (failed[k] = failed[k] || []).push(a);
+    });
+    Object.keys(failed).forEach(k => {
+      const list = failed[k];
+      const real = list.filter(a => SOFT.indexOf(a.reason) < 0);
+      if (!real.length) return;
+      const outside = real.filter(a => a.outside);
+      const last = (outside.length ? outside : real)[(outside.length ? outside : real).length - 1];
+      people.push({ kind: outside.length ? 'bad' : 'warn', last: last, attempts: real, outsideCount: outside.length,
+                    nameKey: last.nameKey, fullName: last.fullName, category: last.category, specialty: last.specialty, shift: last.shift });
+    });
+    return people;
+  }
+
+  function personRow(p) {
+    const status = { ok: '✓ Checked in', void: 'Voided', bad: '✗ Tried from outside', warn: '! Failed verification' }[p.kind];
+    let when = '', notes = [], act = '';
+    if (p.rec) {
+      when = '<div>' + esc(p.rec.time) + '</div><div class="sub">' + esc(delta(p.rec.minutesFromStart)) + '</div>';
+      notes.push(esc(p.rec.distance) + ' m from centre · ±' + esc(p.rec.accuracy) + ' m');
+      const out = p.attempts.filter(a => a.outside).length;
+      if (out) notes.push('<b style="color:var(--bad)">' + out + ' attempt' + (out > 1 ? 's' : '') + ' from outside before</b>');
+      if (p.rec.flags) notes.push('<span class="pill warn">' + esc(p.rec.flags) + '</span>');
+      if (p.kind === 'ok') act = '<button class="small secondary" data-void="' + esc(p.rec.attendanceId) + '" data-label="' +
+        esc(p.fullName + ' · ' + p.rec.shiftLabel + ' · ' + p.rec.time) + '">Void</button>';
+      else notes.push(esc(p.rec.correctionRef));
+    } else {
+      when = '<div>' + esc(p.last.time) + '</div><div class="sub">' + p.attempts.length + ' attempt' + (p.attempts.length > 1 ? 's' : '') + '</div>';
+      if (p.kind === 'bad') notes.push('Last: ' + esc(p.last.distance) + ' m from centre · ±' + esc(p.last.accuracy) + ' m');
+      else notes.push(esc(REASON[p.last.reason] || p.last.reason));
+      notes.push('Not recorded as attendance');
+    }
+    return '<div class="person ' + p.kind + '"><div><div class="name">' + esc(p.fullName || '(no name)') + '</div><div class="sub">' +
+      esc(catLabel(p.category, p.specialty)) + '</div></div><div class="status">' + status + '</div><div class="when">' + when +
+      '</div><div class="notes sub">' + notes.join('<br>') + '</div><div class="act">' + act + '</div></div>';
+  }
+
+  function render() {
+    if (!data) return;
+    const q = $('q').value.trim().toLowerCase(), cf = $('catF').value, sf = $('shiftF').value, show = $('showF').value;
+    const people = buildPeople().filter(p =>
+      (!q || String(p.fullName).toLowerCase().includes(q)) && (!cf || p.category === cf) &&
+      (!sf || p.shift === sf) && (!show || p.kind === show));
+    const order = { ok: 0, bad: 1, warn: 2, void: 3 };
+    const sortP = (a, b) => order[a.kind] - order[b.kind] || String(a.fullName).localeCompare(String(b.fullName));
+
+    let html = '';
+    const known = {};
+    shiftOrder().forEach(s => {
+      known[s.code] = true;
+      if (sf && sf !== s.code) return;
+      const list = people.filter(p => p.shift === s.code).sort(sortP);
+      const c = k => list.filter(p => p.kind === k).length;
+      html += '<div class="card"><div class="shift-head"><h2>' + esc(s.label + ' ' + s.hours + 'h · ' + s.start + '–' + shiftEnd(s)) +
+        '</h2><span class="counts"><span class="dot ok"></span>' + c('ok') + ' checked in &nbsp; <span class="dot bad"></span>' + c('bad') +
+        ' outside &nbsp; <span class="dot warn"></span>' + c('warn') + ' failed</span></div>' +
+        (list.length ? list.map(personRow).join('') : '<div class="empty">No one yet</div>') + '</div>';
+    });
+    const other = people.filter(p => !known[p.shift]).sort(sortP);
+    if (other.length && !sf) html += '<div class="card"><div class="shift-head"><h2>No valid shift chosen</h2></div>' + other.map(personRow).join('') + '</div>';
+    $('board').innerHTML = html;
+
+    const all = buildPeople();
+    const okL = all.filter(p => p.kind === 'ok');
+    $('sOk').textContent = okL.length;
+    $('sBad').textContent = all.filter(p => p.kind === 'bad').length;
+    $('sWarn').textContent = all.filter(p => p.kind === 'warn').length;
+    $('sCats').textContent = ['R1', 'R2', 'R3', 'R4', 'ROTATOR'].map(c => okL.filter(p => p.category === c).length).join(' / ');
+
+    $('tAttempts').innerHTML = data.attempts.slice().reverse().map(a => '<tr><td><span class="dot ' + (a.outside ? 'bad' : 'warn') + '"></span></td><td>' +
+      esc(a.time) + '</td><td>' + esc(a.fullName) + '</td><td>' + esc(catLabel(a.category, a.specialty)) + '</td><td>' + esc(a.shiftLabel) +
+      '</td><td>' + esc(REASON[a.reason] || a.reason) + '</td><td>' + esc(a.distance) + '</td><td>' + esc(a.accuracy) + '</td></tr>').join('') ||
+      '<tr><td colspan="8" class="muted">None</td></tr>';
+  }
+
+  async function load() {
+    const r = await api('adminDaily', { adminKey: adminKey(), date: $('day').value });
+    if (!r.ok) {
+      if (r.code === 'NOT_AUTHORIZED') { try { sessionStorage.removeItem(KEY); } catch (e) {} show('login'); }
+      $('loginMsg').innerHTML = '<div class="result bad">' + msg(r.code) + '</div>';
+      return;
+    }
+    data = r;
+    const sel = $('shiftF'), keep = sel.value;
+    sel.innerHTML = '<option value="">All shifts</option>' + shiftOrder().map(s =>
+      '<option value="' + esc(s.code) + '">' + esc(s.label + ' ' + s.hours + 'h (' + s.start + '–' + shiftEnd(s) + ')') + '</option>').join('');
+    sel.value = keep;
+    show('app'); render();
+  }
+
+  $('btnLogin').onclick = async function () {
+    const k = $('adminKey').value.trim();
+    this.disabled = true;
+    const r = await api('adminLogin', { adminKey: k });
+    this.disabled = false;
+    if (!r.ok) { $('loginMsg').innerHTML = '<div class="result bad">' + msg(r.code) + '</div>'; return; }
+    try { sessionStorage.setItem(KEY, k); } catch (e) {}
+    $('adminKey').value = ''; $('loginMsg').innerHTML = '';
+    load();
+  };
+  $('adminKey').onkeydown = function (e) { if (e.key === 'Enter') $('btnLogin').click(); };
+  $('btnLogout').onclick = function () { try { sessionStorage.removeItem(KEY); } catch (e) {} data = null; show('login'); };
+  $('btnLoad').onclick = load;
+  $('day').onchange = load;
+  $('prevDay').onclick = function () { $('day').value = addDaysKey($('day').value || today, -1); load(); };
+  $('nextDay').onclick = function () { $('day').value = addDaysKey($('day').value || today, 1); load(); };
+  ['q'].forEach(id => { $(id).oninput = render; });
+  ['catF', 'shiftF', 'showF'].forEach(id => { $(id).onchange = render; });
+
+  $('board').onclick = function (e) {
+    const id = e.target.getAttribute && e.target.getAttribute('data-void');
+    if (!id) return;
+    $('cAttId').value = id; $('cAtt').value = e.target.getAttribute('data-label');
+    $('voidCard').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    $('cReason').focus();
+  };
+
+  $('btnVoid').onclick = async function () {
+    if (!$('cAttId').value) return;
+    if (!confirm('Void this check-in?')) return;
+    this.disabled = true;
+    const r = await api('adminVoid', { adminKey: adminKey(), attendanceId: $('cAttId').value, reason: $('cReason').value });
+    this.disabled = false;
+    $('cMsg').innerHTML = '<div class="result ' + (r.ok ? 'ok' : 'bad') + '">' + (r.ok ? 'Check-in voided · ' + esc(r.correctionId) : msg(r.code)) + '</div>';
+    if (r.ok) { $('cReason').value = ''; $('cAtt').value = ''; $('cAttId').value = ''; load(); }
+  };
+
+  document.querySelectorAll('[data-range]').forEach(function (b) {
+    b.onclick = function () {
+      const t = riyadhDateKey(Date.now()), kind = b.getAttribute('data-range');
+      if (kind === 'today') { $('eFrom').value = t; $('eTo').value = t; }
+      if (kind === 'week') { $('eFrom').value = addDaysKey(t, -6); $('eTo').value = t; }
+      if (kind === 'month') { $('eFrom').value = t.slice(0, 8) + '01'; $('eTo').value = t; }
+      if (kind === 'prevmonth') {
+        const last = addDaysKey(t.slice(0, 8) + '01', -1);
+        $('eFrom').value = last.slice(0, 8) + '01'; $('eTo').value = last;
+      }
+    };
+  });
+
+  $('btnExport').onclick = async function () {
+    if (typeof XLSX === 'undefined') { $('eMsg').innerHTML = '<div class="result bad">Could not load the Excel library. Check your internet connection.</div>'; return; }
+    this.disabled = true;
+    const r = await api('adminExport', { adminKey: adminKey(), from: $('eFrom').value, to: $('eTo').value });
+    this.disabled = false;
+    if (!r.ok) { $('eMsg').innerHTML = '<div class="result bad">' + msg(r.code) + '</div>'; return; }
+    XLSX.writeFile(AttendanceExport.buildWorkbook(XLSX, r), 'ER_attendance_' + r.from + '_to_' + r.to + '.xlsx');
+    $('eMsg').innerHTML = '<div class="result ok">File downloaded (' + r.rows.length + ' check-ins, ' + r.attempts.length + ' failed attempts)</div>';
+  };
+
+  api('info').then(function (r) { if (r && r.hospitalName) $('hospitalName').textContent = r.hospitalName; });
+  if (adminKey()) load(); else show('login');
+})();
+</script>
+</body>
+</html>
